@@ -12,7 +12,6 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-
 package org.hyperledger.besu.ethereum.api.jsonrpc.internal.methods;
 
 import org.hyperledger.besu.datatypes.Hash;
@@ -28,30 +27,34 @@ import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManage
 import java.util.Optional;
 
 public class DebugGetModifiedAccountsByHash extends AbstractDebugGetModifiedAccounts {
-    public DebugGetModifiedAccountsByHash(final BlockchainQueries blockchainQueries, final TrieLogManager trieLogManager) {
-        super(blockchainQueries, trieLogManager);
-    }
+  public DebugGetModifiedAccountsByHash(
+      final BlockchainQueries blockchainQueries, final TrieLogManager trieLogManager) {
+    super(blockchainQueries, trieLogManager);
+  }
 
-    @Override
-    public String getName() {
-        return RpcMethod.DEBUG_GET_MODIFIED_ACCOUNTS_BY_HASH.getMethodName();
-    }
+  @Override
+  public String getName() {
+    return RpcMethod.DEBUG_GET_MODIFIED_ACCOUNTS_BY_HASH.getMethodName();
+  }
 
-    @Override
-    protected Optional<BlockHeader> findHeader(final JsonRpcRequestContext request, final int index) {
-        return blockchainQueries.getBlockchain().getBlockHeader(blockHash(request, index));
-    }
+  @Override
+  protected Optional<BlockHeader> findHeader(final JsonRpcRequestContext request, final int index) {
+    return blockchainQueries.getBlockchain().getBlockHeader(blockHash(request, index));
+  }
 
-    @Override
-    protected String blockId(final JsonRpcRequestContext request, final int index) {
-        return blockHash(request, index).getBytes().toUnprefixedHexString();
-    }
+  @Override
+  protected String blockId(final JsonRpcRequestContext request, final int index) {
+    return blockHash(request, index).getBytes().toUnprefixedHexString();
+  }
 
-    private Hash blockHash(final JsonRpcRequestContext request, final int index) {
-        try {
-            return request.getRequiredParameter(index, Hash.class);
-        } catch (JsonRpcParameterException e) {
-            throw new InvalidJsonRpcParameters("Invalid block hash parameter (index " + index + ")", RpcErrorType.INVALID_BLOCK_HASH_PARAMS, e);
-        }
+  private Hash blockHash(final JsonRpcRequestContext request, final int index) {
+    try {
+      return request.getRequiredParameter(index, Hash.class);
+    } catch (JsonRpcParameterException e) {
+      throw new InvalidJsonRpcParameters(
+          "Invalid block hash parameter (index " + index + ")",
+          RpcErrorType.INVALID_BLOCK_HASH_PARAMS,
+          e);
     }
+  }
 }

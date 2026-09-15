@@ -48,6 +48,7 @@ public abstract class AbstractDebugGetModifiedAccounts implements JsonRpcMethod 
     this.trieLogManager = trieLogManager;
   }
 
+  @Override
   public abstract String getName();
 
   protected abstract Optional<BlockHeader> findHeader(
