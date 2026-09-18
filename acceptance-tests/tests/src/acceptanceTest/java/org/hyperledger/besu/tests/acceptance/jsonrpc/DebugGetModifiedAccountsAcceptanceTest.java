@@ -22,11 +22,6 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.params.provider.Arguments;
 
-/**
- * The test cases build three blocks over the engine API, then ask for the accounts each one
- * modified: an empty block, a block paying two withdrawals, and a block whose transaction writes to
- * two contracts.
- */
 public class DebugGetModifiedAccountsAcceptanceTest extends AbstractJsonRpcTest {
   private static final String TEST_RESOURCES_DIR = "/jsonrpc/debug/getModifiedAccounts/";
   private static final String GENESIS_FILE = TEST_RESOURCES_DIR + "genesis.json";
