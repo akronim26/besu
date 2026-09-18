@@ -16,6 +16,7 @@ package org.hyperledger.besu.ethereum.api.jsonrpc.internal.methods;
 
 import org.hyperledger.besu.datatypes.AccountValue;
 import org.hyperledger.besu.datatypes.Address;
+import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.JsonRpcRequestContext;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.JsonRpcError;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.JsonRpcErrorResponse;
@@ -31,6 +32,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.accumulator
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog.LogTuple;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -116,11 +118,24 @@ public abstract class AbstractDebugGetModifiedAccounts implements JsonRpcMethod 
       final Blockchain blockchain,
       final BlockHeader startHeader,
       final BlockHeader endHeader) {
-    final Map<Address, PathBasedValue<AccountValue>> accounts = new HashMap<>();
-
+    final List<Hash> blockHashes = new ArrayList<>();
     BlockHeader header = endHeader;
     while (header.getNumber() > startHeader.getNumber()) {
-      final Optional<TrieLog> maybeTrieLog = trieLogManager.getTrieLogLayer(header.getBlockHash());
+      blockHashes.add(header.getBlockHash());
+      final Optional<BlockHeader> maybeParent = blockchain.getBlockHeader(header.getParentHash());
+      if (maybeParent.isEmpty()) {
+        return error(request, "block " + header.getBlockHash() + " has no parent");
+      }
+      header = maybeParent.get();
+    }
+
+    if (!header.getBlockHash().equals(startHeader.getBlockHash())) {
+      return error(request, "start block is not an ancestor of end block");
+    }
+
+    final Map<Address, PathBasedValue<AccountValue>> accounts = new HashMap<>();
+    for (final Hash blockHash : blockHashes) {
+      final Optional<TrieLog> maybeTrieLog = trieLogManager.getTrieLogLayer(blockHash);
       if (maybeTrieLog.isEmpty()) {
         return new JsonRpcErrorResponse(
             request.getRequest().getId(), RpcErrorType.WORLD_STATE_UNAVAILABLE);
@@ -133,17 +148,6 @@ public abstract class AbstractDebugGetModifiedAccounts implements JsonRpcMethod 
               accounts
                   .computeIfAbsent(address, __ -> new PathBasedValue<>(null, change.getUpdated()))
                   .setPrior(change.getPrior()));
-
-      final Optional<BlockHeader> maybeParent = blockchain.getBlockHeader(header.getParentHash());
-      if (maybeParent.isEmpty()) {
-        return new JsonRpcErrorResponse(
-            request.getRequest().getId(), RpcErrorType.WORLD_STATE_UNAVAILABLE);
-      }
-      header = maybeParent.get();
-    }
-
-    if (!header.getBlockHash().equals(startHeader.getBlockHash())) {
-      return error(request, "start block is not an ancestor of end block");
     }
 
     final List<String> modified =

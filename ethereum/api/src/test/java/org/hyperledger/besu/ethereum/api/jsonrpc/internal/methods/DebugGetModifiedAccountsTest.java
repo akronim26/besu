@@ -15,7 +15,10 @@
 package org.hyperledger.besu.ethereum.api.jsonrpc.internal.methods;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import org.hyperledger.besu.datatypes.AccountValue;
@@ -261,6 +264,9 @@ public class DebugGetModifiedAccountsTest {
 
     assertThat(errorMessage(byHash.response(request(forked.getBlockHash().toString(), hash(3)))))
         .isEqualTo("start block is not an ancestor of end block");
+    // the range is walked as headers first, so an invalid one costs no trie log reads even though
+    // the trie logs above are there to be read
+    verify(trieLogManager, never()).getTrieLogLayer(any());
   }
 
   @Test
