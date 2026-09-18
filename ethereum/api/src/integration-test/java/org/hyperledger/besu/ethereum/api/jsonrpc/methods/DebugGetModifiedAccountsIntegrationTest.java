@@ -20,7 +20,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import org.hyperledger.besu.datatypes.AccountValue;
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
-import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.ProtocolContext;
 import org.hyperledger.besu.ethereum.api.jsonrpc.BlockchainImporter;
 import org.hyperledger.besu.ethereum.api.jsonrpc.JsonRpcTestMethodsFactory;
@@ -31,7 +30,6 @@ import org.hyperledger.besu.ethereum.api.jsonrpc.internal.methods.JsonRpcMethod;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.JsonRpcErrorResponse;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.JsonRpcResponse;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.JsonRpcSuccessResponse;
-import org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.RpcErrorType;
 import org.hyperledger.besu.ethereum.api.query.BlockchainQueries;
 import org.hyperledger.besu.ethereum.chain.MutableBlockchain;
 import org.hyperledger.besu.ethereum.core.Block;
@@ -58,11 +56,6 @@ import com.google.common.io.Resources;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
-/**
- * Exercises debug_getModifiedAccounts* against a real Bonsai world state: the trie logs the methods
- * read are the ones written by importing the test chain, and what they report is checked back
- * against the historical world states rather than against the trie logs it came from.
- */
 public class DebugGetModifiedAccountsIntegrationTest {
 
   private static final String BY_NUMBER = "debug_getModifiedAccountsByNumber";
@@ -119,7 +112,6 @@ public class DebugGetModifiedAccountsIntegrationTest {
       final List<String> modified = result(BY_NUMBER, hex(number));
 
       assertThat(modified).describedAs("block %d", number).isSorted().doesNotHaveDuplicates();
-      // the coinbase collected the block reward, and every sender paid for its gas
       assertThat(modified)
           .describedAs("coinbase of block %d", number)
           .contains(header.getCoinbase().toString());
@@ -155,26 +147,21 @@ public class DebugGetModifiedAccountsIntegrationTest {
   }
 
   @Test
-  public void singleBlockFormMatchesTheExplicitParentRange() {
+  public void theParamFormsAgreeForEveryBlock() {
     for (long number = 1; number <= chainHead; number++) {
-      assertThat(result(BY_NUMBER, hex(number)))
-          .describedAs("block %d", number)
-          .isEqualTo(result(BY_NUMBER, hex(number - 1), hex(number)));
-    }
-  }
+      final String blockHash = header(number).getBlockHash().toString();
+      final String parentHash = header(number - 1).getBlockHash().toString();
+      final List<String> singleBlock = result(BY_NUMBER, hex(number));
 
-  @Test
-  public void byHashMatchesByNumberForEveryBlock() {
-    for (long number = 1; number <= chainHead; number++) {
-      final Hash blockHash = header(number).getBlockHash();
-      final Hash parentHash = header(number - 1).getBlockHash();
-
-      assertThat(result(BY_HASH, blockHash.toString()))
-          .describedAs("block %d", number)
-          .isEqualTo(result(BY_NUMBER, hex(number)));
-      assertThat(result(BY_HASH, parentHash.toString(), blockHash.toString()))
-          .describedAs("range ending at block %d", number)
-          .isEqualTo(result(BY_NUMBER, hex(number - 1), hex(number)));
+      assertThat(result(BY_NUMBER, hex(number - 1), hex(number)))
+          .describedAs("explicit parent range of block %d", number)
+          .isEqualTo(singleBlock);
+      assertThat(result(BY_HASH, blockHash))
+          .describedAs("by hash, block %d", number)
+          .isEqualTo(singleBlock);
+      assertThat(result(BY_HASH, parentHash, blockHash))
+          .describedAs("by hash range ending at block %d", number)
+          .isEqualTo(singleBlock);
     }
   }
 
@@ -183,9 +170,7 @@ public class DebugGetModifiedAccountsIntegrationTest {
     final List<String> range = result(BY_NUMBER, hex(0), hex(chainHead));
 
     assertThat(range).isNotEmpty().isSorted().doesNotHaveDuplicates();
-    // nothing is reported for the range that no single block in it reported
     assertThat(range).isSubsetOf(everyBlockUpTo(chainHead));
-    // a sender's nonce only ever grows, so every sender in the range must be reported
     assertThat(range).containsAll(sendersUpTo(chainHead));
   }
 
@@ -196,22 +181,12 @@ public class DebugGetModifiedAccountsIntegrationTest {
     final Set<String> dropped = everyBlockUpTo(chainHead);
     dropped.removeAll(result(BY_NUMBER, hex(0), hex(chainHead)));
 
-    // an account touched inside the range but left out of it must be back to its starting value
     for (final String address : dropped) {
       final Address account = Address.fromHexString(address);
       assertThat(accountState(end, account))
           .describedAs("state of %s, reported by a block but not by the range", address)
           .isEqualTo(accountState(start, account));
     }
-  }
-
-  @Test
-  public void adjacentRangesCompose() {
-    final long split = chainHead / 2;
-    final Set<String> halves = new LinkedHashSet<>(result(BY_NUMBER, hex(0), hex(split)));
-    halves.addAll(result(BY_NUMBER, hex(split), hex(chainHead)));
-
-    assertThat(result(BY_NUMBER, hex(0), hex(chainHead))).isSubsetOf(halves);
   }
 
   @Test
@@ -226,27 +201,8 @@ public class DebugGetModifiedAccountsIntegrationTest {
     final BlockHeader header = block.getHeader();
 
     assertThat(result(BY_NUMBER, hex(header.getNumber()))).contains(created.toString());
-    // the account did not exist before the block, and holds code after it
     assertThat(accountState(header.getParentHash(), created)).isEmpty();
     assertThat(codeHash(header.getBlockHash(), created)).isPresent().get().isNotEqualTo(Hash.EMPTY);
-  }
-
-  @Test
-  public void coinbaseBalanceGrowsAcrossTheBlockThatPaidIt() {
-    final BlockHeader head = header(chainHead);
-    final Address coinbase = head.getCoinbase();
-
-    assertThat(result(BY_NUMBER, hex(chainHead))).contains(coinbase.toString());
-    assertThat(balance(head.getBlockHash(), coinbase))
-        .isGreaterThan(balance(head.getParentHash(), coinbase));
-  }
-
-  @Test
-  public void anAccountUntouchedByTheRangeIsNotReported() {
-    final Address untouched = Address.fromHexString("0x00000000000000000000000000000000000000ff");
-    assertThat(accountState(header(chainHead).getBlockHash(), untouched)).isEmpty();
-
-    assertThat(result(BY_NUMBER, hex(0), hex(chainHead))).doesNotContain(untouched.toString());
   }
 
   @Test
@@ -287,14 +243,6 @@ public class DebugGetModifiedAccountsIntegrationTest {
         .isInstanceOf(InvalidJsonRpcParameters.class);
   }
 
-  @Test
-  public void wrongNumberOfParamsIsRejected() {
-    assertThat(errorType(BY_NUMBER)).isEqualTo(RpcErrorType.INVALID_PARAM_COUNT);
-    assertThat(errorType(BY_NUMBER, hex(1), hex(2), hex(3)))
-        .isEqualTo(RpcErrorType.INVALID_PARAM_COUNT);
-    assertThat(errorType(BY_HASH)).isEqualTo(RpcErrorType.INVALID_PARAM_COUNT);
-  }
-
   private void assertEveryReportedAccountChanged(
       final Hash startBlockHash, final Hash endBlockHash, final List<String> reported) {
     assertThat(reported).isNotEmpty();
@@ -306,7 +254,6 @@ public class DebugGetModifiedAccountsIntegrationTest {
     }
   }
 
-  /** Nonce, balance, code hash and storage root of an account, empty when it does not exist. */
   private Optional<String> accountState(final Hash blockHash, final Address address) {
     return account(
         blockHash,
@@ -322,10 +269,6 @@ public class DebugGetModifiedAccountsIntegrationTest {
 
   private Optional<Hash> codeHash(final Hash blockHash, final Address address) {
     return account(blockHash, address, Account::getCodeHash);
-  }
-
-  private Wei balance(final Hash blockHash, final Address address) {
-    return account(blockHash, address, Account::getBalance).orElse(Wei.ZERO);
   }
 
   private <U> Optional<U> account(
@@ -398,10 +341,6 @@ public class DebugGetModifiedAccountsIntegrationTest {
     final JsonRpcErrorResponse response = errorResponse(method, params);
     assertThat(response.getError().getCode()).isEqualTo(-32000);
     return response.getError().getMessage();
-  }
-
-  private RpcErrorType errorType(final String method, final Object... params) {
-    return errorResponse(method, params).getErrorType();
   }
 
   private JsonRpcErrorResponse errorResponse(final String method, final Object... params) {

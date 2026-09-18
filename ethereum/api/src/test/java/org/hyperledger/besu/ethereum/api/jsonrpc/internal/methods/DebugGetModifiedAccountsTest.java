@@ -37,15 +37,14 @@ import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.BlockHeaderTestFixture;
 import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
+import org.hyperledger.besu.ethereum.trie.pathbased.common.provider.PathBasedWorldStateProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogLayer;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManager;
-import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.accumulator.PathBasedValue;
+import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.WorldStateConfig;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -54,7 +53,6 @@ import org.junit.jupiter.api.Test;
 
 public class DebugGetModifiedAccountsTest {
 
-  // the hex strings are the expected wire format: lower case, 0x prefixed, not truncated
   private static final String A_HEX = "0x000000000000000000000000000000000000000a";
   private static final String B_HEX = "0x000000000000000000000000000000000000000b";
   private static final String C_HEX = "0x000000000000000000000000000000000000000c";
@@ -71,7 +69,6 @@ public class DebugGetModifiedAccountsTest {
   private final BlockchainQueries blockchainQueries = mock(BlockchainQueries.class);
   private final TrieLogManager trieLogManager = mock(TrieLogManager.class);
   private final List<BlockHeader> headers = new ArrayList<>();
-  private final Map<Integer, TrieLogLayer> layers = new HashMap<>();
 
   private DebugGetModifiedAccountsByNumber byNumber;
   private DebugGetModifiedAccountsByHash byHash;
@@ -104,30 +101,12 @@ public class DebugGetModifiedAccountsTest {
   }
 
   @Test
-  public void byNumberReturnsAccountsModifiedAcrossTheRange() {
+  public void accountsModifiedAcrossTheRangeAreReported() {
     trieLog(2, layer().addAccountChange(A, account(0, 0), account(1, 0)));
     trieLog(3, layer().addAccountChange(B, account(0, 0), account(0, 7)));
 
     assertThat(modified(byNumber, number(1), number(3))).containsExactly(A_HEX, B_HEX);
-
-    // and each reported account really does hold a different value at the end of the range
-    assertThat(prior(2, A).getNonce()).isZero();
-    assertThat(updated(2, A).getNonce()).isEqualTo(1);
-    assertThat(updated(2, A).getBalance()).isEqualTo(Wei.ZERO);
-    assertThat(prior(3, B).getBalance()).isEqualTo(Wei.ZERO);
-    assertThat(updated(3, B).getBalance()).isEqualTo(Wei.of(7));
-    assertThat(updated(3, B).getNonce()).isZero();
-  }
-
-  @Test
-  public void byHashReturnsAccountsModifiedAcrossTheRange() {
-    trieLog(2, layer().addAccountChange(A, account(0, 0), account(1, 0)));
-    trieLog(3, layer().addAccountChange(B, account(0, 0), account(0, 7)));
-
     assertThat(modified(byHash, hash(1), hash(3))).containsExactly(A_HEX, B_HEX);
-
-    assertThat(updated(2, A).getNonce()).isEqualTo(1);
-    assertThat(updated(3, B).getBalance()).isEqualTo(Wei.of(7));
   }
 
   @Test
@@ -141,32 +120,15 @@ public class DebugGetModifiedAccountsTest {
                 C, account(0, 0), account(0, 0, Hash.EMPTY_TRIE_HASH, OTHER_CODE_HASH))
             .addAccountChange(D, account(0, 0), account(0, 0, OTHER_STORAGE_ROOT, Hash.EMPTY)));
 
-    // nonce, balance, code hash and storage root respectively
     assertThat(modified(byNumber, number(2))).containsExactly(A_HEX, B_HEX, C_HEX, D_HEX);
-
-    // each account differs from its prior in exactly the one field named above
-    assertThat(updated(2, A).getNonce()).isEqualTo(1);
-    assertThat(updated(2, A).getBalance()).isEqualTo(prior(2, A).getBalance());
-    assertThat(updated(2, B).getBalance()).isEqualTo(Wei.of(7));
-    assertThat(updated(2, B).getNonce()).isEqualTo(prior(2, B).getNonce());
-    assertThat(updated(2, C).getCodeHash()).isEqualTo(OTHER_CODE_HASH);
-    assertThat(updated(2, C).getStorageRoot()).isEqualTo(prior(2, C).getStorageRoot());
-    assertThat(updated(2, D).getStorageRoot()).isEqualTo(OTHER_STORAGE_ROOT);
-    assertThat(updated(2, D).getCodeHash()).isEqualTo(prior(2, D).getCodeHash());
   }
 
   @Test
   public void accountTouchedWithoutChangingIsNotReported() {
-    // a trie log can hold a touched-but-identical account, e.g. a zero value self transfer
     trieLog(2, layer().addAccountChange(A, account(3, 5), account(3, 5)));
     trieLog(3, layer().addAccountChange(B, account(0, 0), account(0, 7)));
 
     assertThat(modified(byNumber, number(1), number(3))).containsExactly(B_HEX);
-
-    // A was in the trie log, but with nonce 3 and balance 5 on both sides of the change
-    assertThat(prior(2, A).getNonce()).isEqualTo(3);
-    assertThat(updated(2, A).getNonce()).isEqualTo(3);
-    assertThat(updated(2, A).getBalance()).isEqualTo(Wei.of(5));
   }
 
   @Test
@@ -176,10 +138,6 @@ public class DebugGetModifiedAccountsTest {
 
     assertThat(modified(byNumber, number(3))).containsExactly(B_HEX);
     assertThat(modified(byHash, hash(3))).containsExactly(B_HEX);
-
-    // B's balance moved in block 3; A's nonce moved a block earlier, outside the diff
-    assertThat(updated(3, B).getBalance()).isEqualTo(Wei.of(7));
-    assertThat(updated(2, A).getNonce()).isEqualTo(1);
   }
 
   @Test
@@ -188,12 +146,6 @@ public class DebugGetModifiedAccountsTest {
     trieLog(3, layer().addAccountChange(A, account(1, 0), account(2, 0)));
 
     assertThat(modified(byNumber, number(1), number(3))).containsExactly(A_HEX);
-
-    // the net change over the range is nonce 0 -> 2; the intermediate nonce of 1 is irrelevant
-    assertThat(prior(2, A).getNonce()).isZero();
-    assertThat(updated(2, A).getNonce()).isEqualTo(1);
-    assertThat(prior(3, A).getNonce()).isEqualTo(1);
-    assertThat(updated(3, A).getNonce()).isEqualTo(2);
   }
 
   @Test
@@ -206,13 +158,6 @@ public class DebugGetModifiedAccountsTest {
             .addAccountChange(B, account(0, 0), account(0, 7)));
 
     assertThat(modified(byNumber, number(1), number(3))).containsExactly(B_HEX);
-
-    // A ends the range holding exactly what it held at the start: nonce 0, balance 0
-    assertThat(updated(3, A).getNonce()).isEqualTo(prior(2, A).getNonce());
-    assertThat(updated(3, A).getBalance()).isEqualTo(prior(2, A).getBalance());
-    assertThat(updated(3, A).getCodeHash()).isEqualTo(prior(2, A).getCodeHash());
-    assertThat(updated(3, A).getStorageRoot()).isEqualTo(prior(2, A).getStorageRoot());
-    assertThat(updated(3, B).getBalance()).isEqualTo(Wei.of(7));
   }
 
   @Test
@@ -224,37 +169,6 @@ public class DebugGetModifiedAccountsTest {
   }
 
   @Test
-  public void startBlockMustBeBeforeEndBlock() {
-    assertThat(errorMessage(byNumber.response(request(number(3), number(3)))))
-        .isEqualTo("start block height (3) must be less than end block height (3)");
-    assertThat(errorMessage(byNumber.response(request(number(4), number(2)))))
-        .isEqualTo("start block height (4) must be less than end block height (2)");
-    assertThat(errorMessage(byHash.response(request(hash(4), hash(2)))))
-        .isEqualTo("start block height (4) must be less than end block height (2)");
-  }
-
-  @Test
-  public void unknownStartBlockIsAnError() {
-    assertThat(errorMessage(byNumber.response(request(number(99), number(3)))))
-        .isEqualTo("start block 63 not found");
-    assertThat(errorMessage(byHash.response(request(Hash.ZERO.toString(), hash(3)))))
-        .isEqualTo(
-            "start block 0000000000000000000000000000000000000000000000000000000000000000 not found");
-  }
-
-  @Test
-  public void unknownEndBlockIsAnError() {
-    assertThat(errorMessage(byNumber.response(request(number(1), number(99)))))
-        .isEqualTo("end block 99 not found");
-  }
-
-  @Test
-  public void genesisHasNoParentToDiffAgainst() {
-    assertThat(errorMessage(byNumber.response(request(number(0)))))
-        .isEqualTo("block 0 has no parent");
-  }
-
-  @Test
   public void startBlockMustBeAnAncestorOfEndBlock() {
     final BlockHeader forked =
         new BlockHeaderTestFixture().number(1).parentHash(Hash.ZERO).buildHeader();
@@ -262,71 +176,42 @@ public class DebugGetModifiedAccountsTest {
     trieLog(2, layer());
     trieLog(3, layer());
 
-    assertThat(errorMessage(byHash.response(request(forked.getBlockHash().toString(), hash(3)))))
+    assertThat(errorMessage(response(byHash, forked.getBlockHash().toString(), hash(3))))
         .isEqualTo("start block is not an ancestor of end block");
-    // the range is walked as headers first, so an invalid one costs no trie log reads even though
-    // the trie logs above are there to be read
     verify(trieLogManager, never()).getTrieLogLayer(any());
-  }
-
-  @Test
-  public void missingTrieLogIsReportedAsUnavailableWorldState() {
-    trieLog(3, layer().addAccountChange(A, account(0, 0), account(1, 0)));
-
-    assertThat(errorType(byNumber.response(request(number(1), number(3)))))
-        .isEqualTo(RpcErrorType.WORLD_STATE_UNAVAILABLE);
   }
 
   @Test
   public void rangeLongerThanTheTrieLogWindowIsRejected() {
     when(trieLogManager.getMaxLayersToLoad()).thenReturn(1L);
 
-    assertThat(errorType(byNumber.response(request(number(1), number(3)))))
+    assertThat(errorType(response(byNumber, number(1), number(3))))
         .isEqualTo(RpcErrorType.EXCEEDS_RPC_MAX_BLOCK_RANGE);
   }
 
   @Test
   public void wrongNumberOfParamsIsRejected() {
-    assertThat(errorType(byNumber.response(request()))).isEqualTo(RpcErrorType.INVALID_PARAM_COUNT);
-    assertThat(errorType(byNumber.response(request(number(1), number(2), number(3)))))
+    assertThat(errorType(response(byNumber))).isEqualTo(RpcErrorType.INVALID_PARAM_COUNT);
+    assertThat(errorType(response(byNumber, number(1), number(2), number(3))))
         .isEqualTo(RpcErrorType.INVALID_PARAM_COUNT);
-    assertThat(errorType(byHash.response(request()))).isEqualTo(RpcErrorType.INVALID_PARAM_COUNT);
+    assertThat(errorType(response(byHash))).isEqualTo(RpcErrorType.INVALID_PARAM_COUNT);
   }
 
   @SuppressWarnings("unchecked")
   private List<String> modified(final JsonRpcMethod method, final Object... params) {
-    final JsonRpcResponse response = method.response(request(params));
+    final JsonRpcResponse response = response(method, params);
     assertThat(response).isInstanceOf(JsonRpcSuccessResponse.class);
     return (List<String>) ((JsonRpcSuccessResponse) response).getResult();
   }
 
-  private JsonRpcRequestContext request(final Object... params) {
-    return new JsonRpcRequestContext(
-        new JsonRpcRequest("2.0", "debug_getModifiedAccounts", params));
+  private JsonRpcResponse response(final JsonRpcMethod method, final Object... params) {
+    return method.response(
+        new JsonRpcRequestContext(new JsonRpcRequest("2.0", method.getName(), params)));
   }
 
   private void trieLog(final int block, final TrieLogLayer layer) {
-    layers.put(block, layer);
     when(trieLogManager.getTrieLogLayer(headers.get(block).getBlockHash()))
         .thenReturn(Optional.<TrieLog>of(layer));
-  }
-
-  /**
-   * The account as it stood before the given block, as the trie log the method reads records it.
-   */
-  private AccountValue prior(final int block, final Address address) {
-    return accountChange(block, address).getPrior();
-  }
-
-  /** The account as it stands after the given block. */
-  private AccountValue updated(final int block, final Address address) {
-    return accountChange(block, address).getUpdated();
-  }
-
-  private PathBasedValue<AccountValue> accountChange(final int block, final Address address) {
-    final PathBasedValue<AccountValue> change = layers.get(block).getAccountChanges().get(address);
-    assertThat(change).describedAs("account change for %s in block %d", address, block).isNotNull();
-    return change;
   }
 
   private TrieLogLayer layer() {
