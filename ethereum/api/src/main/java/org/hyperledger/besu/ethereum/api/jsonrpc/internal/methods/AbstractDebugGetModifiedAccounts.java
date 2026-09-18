@@ -39,7 +39,6 @@ import java.util.Map;
 import java.util.Optional;
 
 public abstract class AbstractDebugGetModifiedAccounts implements JsonRpcMethod {
-  private static final int SERVER_ERROR_CODE = -32000;
 
   protected final BlockchainQueries blockchainQueries;
   protected final TrieLogManager trieLogManager;
@@ -68,12 +67,16 @@ public abstract class AbstractDebugGetModifiedAccounts implements JsonRpcMethod 
 
     if (blockchainQueries.getWorldStateArchive() instanceof PathBasedWorldStateProvider provider
         && provider.getWorldStateSharedSpec().isTrieDisabled()) {
-      return error(request, "modified accounts unavailable: world state trie is disabled");
+      return new JsonRpcErrorResponse(
+          request.getRequest().getId(), RpcErrorType.METHOD_NOT_ENABLED);
     }
 
     final Optional<BlockHeader> maybeFirstHeader = findHeader(request, 0);
     if (maybeFirstHeader.isEmpty()) {
-      return error(request, "start block " + blockId(request, 0) + " not found");
+      return error(
+          request,
+          RpcErrorType.BLOCK_NOT_FOUND,
+          "start block " + blockId(request, 0) + " not found");
     }
 
     final Blockchain blockchain = blockchainQueries.getBlockchain();
@@ -85,14 +88,19 @@ public abstract class AbstractDebugGetModifiedAccounts implements JsonRpcMethod 
           blockchain.getBlockHeader(endHeader.getParentHash());
       if (maybeParent.isEmpty()) {
         return error(
-            request, "block " + Long.toHexString(endHeader.getNumber()) + " has no parent");
+            request,
+            RpcErrorType.PARENT_BLOCK_NOT_FOUND,
+            "block " + Long.toHexString(endHeader.getNumber()) + " has no parent");
       }
       startHeader = maybeParent.get();
     } else {
       startHeader = maybeFirstHeader.get();
       final Optional<BlockHeader> maybeEndHeader = findHeader(request, 1);
       if (maybeEndHeader.isEmpty()) {
-        return error(request, "end block " + blockId(request, 1) + " not found");
+        return error(
+            request,
+            RpcErrorType.BLOCK_NOT_FOUND,
+            "end block " + blockId(request, 1) + " not found");
       }
       endHeader = maybeEndHeader.get();
     }
@@ -100,6 +108,7 @@ public abstract class AbstractDebugGetModifiedAccounts implements JsonRpcMethod 
     if (startHeader.getNumber() >= endHeader.getNumber()) {
       return error(
           request,
+          RpcErrorType.INVALID_BLOCK_RANGE,
           String.format(
               "start block height (%d) must be less than end block height (%d)",
               startHeader.getNumber(), endHeader.getNumber()));
@@ -124,13 +133,17 @@ public abstract class AbstractDebugGetModifiedAccounts implements JsonRpcMethod 
       blockHashes.add(header.getBlockHash());
       final Optional<BlockHeader> maybeParent = blockchain.getBlockHeader(header.getParentHash());
       if (maybeParent.isEmpty()) {
-        return error(request, "block " + header.getBlockHash() + " has no parent");
+        return error(
+            request,
+            RpcErrorType.PARENT_BLOCK_NOT_FOUND,
+            "block " + header.getBlockHash() + " has no parent");
       }
       header = maybeParent.get();
     }
 
     if (!header.getBlockHash().equals(startHeader.getBlockHash())) {
-      return error(request, "start block is not an ancestor of end block");
+      return error(
+          request, RpcErrorType.INVALID_BLOCK_RANGE, "start block is not an ancestor of end block");
     }
 
     final Map<Address, PathBasedValue<AccountValue>> accounts = new HashMap<>();
@@ -160,8 +173,9 @@ public abstract class AbstractDebugGetModifiedAccounts implements JsonRpcMethod 
     return new JsonRpcSuccessResponse(request.getRequest().getId(), modified);
   }
 
-  private static JsonRpcResponse error(final JsonRpcRequestContext request, final String message) {
+  private static JsonRpcResponse error(
+      final JsonRpcRequestContext request, final RpcErrorType type, final String message) {
     return new JsonRpcErrorResponse(
-        request.getRequest().getId(), new JsonRpcError(SERVER_ERROR_CODE, message, null));
+        request.getRequest().getId(), new JsonRpcError(type.getCode(), message, null));
   }
 }
